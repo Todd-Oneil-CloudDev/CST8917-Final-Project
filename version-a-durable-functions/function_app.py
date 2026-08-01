@@ -1,8 +1,11 @@
 import json
+import os
+import aiohttp
 import azure.functions as func
 import logging
 from typing import Dict, Any
 import datetime
+from azure.durable_functions import OrchestrationRuntimeStatus
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -21,7 +24,7 @@ def UpdatePayload(payload: Dict[str, Any], status: str, reason: str):
 @app.durable_client_input(client_name="client")
 async def expense_orchestration_starter(req: func.HttpRequest, client):
 
-    logging.info("check-booking function triggered")
+    logging.info("expense-approval function triggered")
 
     try:
         expense = req.get_json()
@@ -42,6 +45,16 @@ async def expense_orchestration_starter(req: func.HttpRequest, client):
             status_code=400
         )
 
+    # Confirm amount is a number
+    if not isinstance(expense['amount'], (int, float)):
+        return func.HttpResponse(
+            json.dumps({"error": f"{expense['amount']} is not a number type."}),
+            mimetype="application/json",
+            status_code=400
+        )
+
+    logging.info(f"processing expense...")
+
     function_name = req.route_params.get('functionName')
     instance_id = await client.start_new(
         function_name,
@@ -59,15 +72,9 @@ def expense_orchestrator(context):
 
     data = context.get_input()
 
-    # --- Step 1: Validate ---
-    validation_result = yield context.call_activity(
-        "validate_category",
-        data['category']
-    )
-
     final_response = {
-        'Name': data['employeeName'],
-        'Email': data['employeeEmail'],
+        'name': data['employeeName'],
+        'email': data['employeeEmail'],
         'amount': data['amount'],
         'category': data['category'],
         'description': data['description'],
@@ -78,68 +85,115 @@ def expense_orchestrator(context):
         }
     }
 
+    logging.info(f"Validating Category...")
+    # --- Step 1: Validate ---
+    validation_result = yield context.call_activity(
+        "validate_category",
+        data['category']
+    )
+
     if not validation_result['is_valid']:
+        logging.info(f"Category: {data['category']} Not Valid...")
         final_response = UpdatePayload(
             final_response, 
             'Rejected', 
             validation_result['reason'])
         skip_processing = True
-
-    if not skip_processing:    
+    else:
+        logging.info(f"Category Validated...")
+        logging.info(f"Processing...")
         # --- Step 2: Check Auto Approval ---
+        if data['amount'] < 100:
+            final_response = UpdatePayload(
+                final_response, 
+                'Approved', 
+                'Expense amount under $100 - auto approved')
+            skip_processing = True
+            logging.info(f"Approved...")
 
+    
+    logging.info(f"Processing...")
+    if not skip_processing:    
 
         # --- Step 3: Request Manager Approval ---
         approval_event = "manager_approval"
         timeout = context.current_utc_datetime + datetime.timedelta(seconds=60)
 
         # Creates a task to listen for a 'manager-approval' event triggered by a person
+        context.set_custom_status ({'waiting_for': approval_event})
         approval_task = context.wait_for_external_event(approval_event)
 
         # Creates the timeout task setting the durable function timer to the defined 60 seconds above
         timeout_task = context.create_timer(timeout)
 
+        logging.info(f"Awaiting Manager Approval...")
+
         # Races the 2 tasks defined above, which ever task responds first will decide processing logic
         winner = yield context.task_any([approval_task, timeout_task])
 
+        # Clear custom status
+        context.set_custom_status ({'waiting_for': None})
+
         if winner == timeout_task:
+            logging.info(f"Manager Unavailable For Approval...")
             final_response = UpdatePayload(
                 final_response, 
                 'Escalated', 
                 'Manager unavailable for approval.')
         else:
+            logging.info(f"Manager Responded...")
             manager_decision = approval_task.result
+            if isinstance(manager_decision, str):
+                manager_decision = json.loads(manager_decision)
+
             final_response = UpdatePayload(
                 final_response, 
                 manager_decision['decision'], 
                 manager_decision['reason'])
                 
 
-
+    logging.info(f"Notifying...")
     # --- Step 4: Notify User ---
     notification_result = yield context.call_activity(
         "send_notification",
         final_response
     )
 
+    sent = ''
+    if notification_result == 200:
+        sent = 'email sent'
+    else:
+        sent = 'email failed'
+
     return {
-        "status": "Approved",
-        "processing": processing_result,
-        "notification": notification_result
+        "status": final_response['response']['status'],
+        "notification": sent 
     }
 
 
 # Activity
 # --- Send Notification ---
-@app.activity_trigger(input_name="city")
-def send_notification(city: str):
-    return "Hello " + city 
+@app.activity_trigger(input_name="payload")
+async def send_notification(payload: dict):
+    logic_app_url = os.getenv('LOGIC_APP_NOTIFICATION_URL')
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(logic_app_url, json=payload) as response:
+                response.raise_for_status()
+                status = response.status
+    except Exception as e:
+        logging.error(f"Logic App call failed: {e}")
+        return 500
+
+    logging.info(f"Logic App call returned {status}")
+    return status
 
 
 # Activity
 # --- Category Validiation ---
 @app.activity_trigger(input_name="category")
-def validate_category(category: str):
+async def validate_category(category: str):
 
     # Validate Category
     valid_categories = ["travel", "meals", "supplies", "equipment", "software", "other"]
@@ -147,7 +201,7 @@ def validate_category(category: str):
 
     return {
         'is_valid': valid,
-        'reason': f"{category} is not a valid category"
+        'reason': '' if valid else f"{category} is not a valid category"
     }
 
 # Activity
@@ -164,6 +218,27 @@ async def manager_approval(req: func.HttpRequest, client):
         'reason': 'some reason given'
       }
     """
+    # Get orchestrator instance
+    instance_id = req.route_params.get("instance_id")
+    client_status = await client.get_status(instance_id)
+
+    # check if orchestrator is running
+    if client_status is None:
+        return func.HttpResponse("Instance Not Found", status_code=404)
+
+    print(type(client_status.runtime_status))
+
+    if client_status.runtime_status not in [OrchestrationRuntimeStatus.Running, OrchestrationRuntimeStatus.Pending]:
+        return func.HttpResponse("Instance Not Found", status_code=409)
+
+    # Check custom status code
+    waiting_for = None
+    if client_status.custom_status and 'waiting_for' in client_status.custom_status:
+        waiting_for = client_status.custom_status['waiting_for']
+
+    if waiting_for != "manager_approval":
+        return func.HttpResponse("Orchestrator not waiting for this event", status_code=409)
+
     try:
         approval = req.get_json()
     except ValueError:
@@ -182,7 +257,14 @@ async def manager_approval(req: func.HttpRequest, client):
             status_code=400
         )
 
-    instance_id = req.route_params.get("instance_id")
+    allowed_dec = ['Approved', 'Rejected']
+    allowed = approval['decision'] in allowed_dec 
+    if not allowed:
+        return func.HttpResponse(
+            json.dumps({"error": f"{approval['decision']} is not a valid response. Must be either 'Approved' or 'Rejected'"}),
+            mimetype="application/json",
+            status_code=400
+        )    
 
     await client.raise_event(instance_id, "manager_approval", approval)
 

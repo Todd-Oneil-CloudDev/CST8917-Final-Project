@@ -1,0 +1,261 @@
+### ============================================================
+### Expense Approval Pipeline - Test Requests
+### Requires: VS Code "REST Client" extension (humao.rest-client)
+### Run `func start` locally before executing these
+### ============================================================
+
+# @baseUrl = http://localhost:7071/api
+@baseUrl = https://cst8917-final-b3g9fkfgd9gfg9dm.canadacentral-01.azurewebsites.net/api
+@managerDecision = Approved
+
+### ------------------------------------------------------------
+### 0. Health Check
+### ------------------------------------------------------------
+GET {{baseUrl}}
+
+
+### ------------------------------------------------------------
+### 1. Auto-Approve Path (amount < 100)
+### Expect: 202 Accepted, statusQueryGetUri returned
+### ------------------------------------------------------------
+# @name startAutoApprove
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 42.50,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "manager@example.com"
+}
+
+### Check status - paste statusQueryGetUri value manually, or use variable below
+### (REST Client can't easily parse the whole URL out of the body automatically,
+### so grab the "id" field and hit the status endpoint directly)
+@autoApproveInstanceId = {{startAutoApprove.response.body.id}}
+
+### 1b. Poll orchestration status (auto-approve)
+### Expect after a couple seconds: runtimeStatus "Completed", status "Approved", notification "email sent"
+GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{autoApproveInstanceId}}
+
+
+### ------------------------------------------------------------
+### 2. Manager Approval Required Path (amount >= 100)
+### Expect: 202 Accepted, orchestration will wait for external event
+### ------------------------------------------------------------
+# @name startManagerApproval
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "John Smith",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 450.00,
+    "category": "travel",
+    "description": "Flight to client site",
+    "managerEmail": "manager@example.com"
+}
+
+###
+@managerApprovalInstanceId = {{startManagerApproval.response.body.id}}
+@managerApprovalStatusUri = {{startManagerApproval.response.body.statusQueryUri}}
+
+### 2a. Poll status BEFORE approving - runtimeStatus should be "Running",
+### customStatus should show {"waiting_for": "manager_approval"}
+# GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{managerApprovalInstanceId}}
+GET {{managerApprovalStatusUri}}
+
+### 2b. Manager approves the expense
+### Expect: 200 OK, "Sent decision ... to instance ..."
+POST {{baseUrl}}/approval/{{managerApprovalInstanceId}}
+Content-Type: application/json
+
+{
+    "decision": "Approved",
+    "reason": "Looks good, approved for client travel."
+}
+
+### 2c. Poll status AFTER approving
+### Expect: runtimeStatus "Completed", status "Approved", notification "email sent"
+GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{managerApprovalInstanceId}}
+
+
+### ------------------------------------------------------------
+### 3. Manager Rejection Path
+### ------------------------------------------------------------
+# @name startRejection
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Alice Nguyen",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 899.99,
+    "category": "equipment",
+    "description": "New monitor for home office",
+    "managerEmail": "manager@example.com"
+}
+### 
+@rejectionInstanceId = {{startRejection.response.body.id}}
+
+### 3a. Manager rejects the expense
+POST {{baseUrl}}/approval/{{rejectionInstanceId}}
+Content-Type: application/json
+
+{
+    "decision": "Rejected",
+    "reason": "Not an approved equipment category for remote workers."
+}
+
+### 3b. Poll status - expect status "Rejected"
+GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{rejectionInstanceId}}
+
+
+### ------------------------------------------------------------
+### 4. Escalation Path (manager doesn't respond within timeout window)
+### Start this, then simply DO NOT call the approval endpoint.
+### Wait longer than your timeout (currently 60s) and poll.
+### ------------------------------------------------------------
+# @name startEscalation
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Bob Lee",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 250.00,
+    "category": "software",
+    "description": "Annual license renewal",
+    "managerEmail": "manager@example.com"
+}
+
+###
+@escalationInstanceId = {{startEscalation.response.body.id}}
+
+### 4a. Wait 60+ seconds, then poll - expect status "Escalated"
+GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{escalationInstanceId}}
+
+
+### ------------------------------------------------------------
+### 5. Validation Failures - Starter Function
+### ------------------------------------------------------------
+
+### 5a. Missing required fields (missing amount, managerEmail)
+### Expect: 400, "Missing required fields: amount, managerEmail"
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Missing Fields Test",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "category": "travel",
+    "description": "Testing missing fields"
+}
+
+### 5b. Invalid JSON body
+### Expect: 400, "Invalid JSON in request body"
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{ this is not valid json }
+
+### 5c. Amount is not a number (string instead)
+### Expect: 400, "... is not a number type."
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Bad Amount Test",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": "one hundred",
+    "category": "travel",
+    "description": "Testing non-numeric amount",
+    "managerEmail": "manager@example.com"
+}
+
+### 5d. Invalid category (should still start orchestration, but resolve to Rejected)
+# @name startInvalidCategory
+POST {{baseUrl}}/orchestrators/expense_orchestrator
+Content-Type: application/json
+
+{
+    "employeeName": "Invalid Category Test",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 75.00,
+    "category": "vacation",
+    "description": "Testing invalid category",
+    "managerEmail": "manager@example.com"
+}
+
+###
+@invalidCategoryInstanceId = {{startInvalidCategory.response.body.id}}
+
+### 5e. Poll status - expect status "Rejected", reason "vacation is not a valid category"
+GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{invalidCategoryInstanceId}}
+
+
+### ------------------------------------------------------------
+### 6. Validation Failures - Manager Approval Endpoint
+### ------------------------------------------------------------
+
+### 6a. Approval call against a nonexistent instance ID
+### Expect: 404, "Instance Not Found"
+POST {{baseUrl}}/approval/00000000000000000000000000000000
+Content-Type: application/json
+
+{
+    "decision": "Approved",
+    "reason": "This instance does not exist"
+}
+
+### 6b. Approval call missing 'decision' field
+### Expect: 400, "Missing required fields: decision"
+POST {{baseUrl}}/approval/{{managerApprovalInstanceId}}
+Content-Type: application/json
+
+{
+    "reason": "Forgot to include a decision"
+}
+
+### 6c. Approval call with an invalid decision value
+### Expect: 400, "... is not a valid response. Must be either 'Approved' or 'Rejected'"
+POST {{baseUrl}}/approval/{{managerApprovalInstanceId}}
+Content-Type: application/json
+
+{
+    "decision": "Maybe",
+    "reason": "Not sure yet"
+}
+
+### 6d. Approval call against an instance NOT currently waiting for approval
+### (e.g. re-run 2b twice, or target the auto-approve instance from test #1,
+### which completes immediately and is never waiting on the event)
+### Expect: 409, "Orchestrator not waiting for this event" (after the Response bug fix)
+POST {{baseUrl}}/approval/{{autoApproveInstanceId}}
+Content-Type: application/json
+
+{
+    "decision": "Approved",
+    "reason": "This orchestration already completed via auto-approval"
+}
+
+
+### ------------------------------------------------------------
+### Notes
+### ------------------------------------------------------------
+# - Run requests top to bottom within each numbered section; later requests in
+#   a section depend on the @name'd response above it via REST Client variables.
+# - REST Client variable capture (e.g. {{startAutoApprove.response.body.id}}) only
+#   works after you've manually sent that specific request at least once in this
+#   VS Code session - the variable won't resolve until its source request has run.
+# - Durable Functions' default HTTP management API exposes GET on
+#   /runtime/webhooks/durabletask/instances/{instanceId} normally, but since your
+#   HttpStart binding gives you a friendlier "statusQueryGetUri" in the 202 body,
+#   /orchestrators/expense_orchestrator/instances/{id} above assumes you have (or add)
+#   a thin status-check route. If you don't have one, just copy the full
+#   "statusQueryGetUri" value from the 202 response body and GET that URL directly
+#   instead - it will include the required system key as a query param.
+# - Adjust the port (7071) if your local.settings.json or launch config uses a
+#   different one.
