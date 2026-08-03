@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Any
 import datetime
 from azure.durable_functions import OrchestrationRuntimeStatus
-from azure.data.tables import TableServiceClient, ResourceExistsError
+from azure.data.tables import TableServiceClient
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -24,11 +24,11 @@ def UpdatePayload(payload: Dict[str, Any], status: str):
     return payload
 
 def generate_id(): 
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 def update_audit_record(input: dict, status: str):
     input['Status'] = status
-    input['ResolvedAt'] = datetime.fromisoformat(datetime.datetime.now(datetime.timezone.utc))
+    input['ResolvedAt'] = datetime.datetime.isoformat(datetime.datetime.now(datetime.timezone.utc))
 
     table_client.upsert_entity(input)
 
@@ -197,8 +197,8 @@ def expense_orchestrator(context):
             'Description': structure['Description'],
             'ManagerEmail': structure['ManagerEmail'],
             'Status': structure['Status'],
-            'SubmittedAt': structure['SubmittedAt'],
-            'ResolvedAt': structure['ResolvedAt']
+            'SubmittedAt': str(structure['SubmittedAt']),
+            'ResolvedAt': str(structure['ResolvedAt'])
         }
     )
 
@@ -257,16 +257,24 @@ async def insert_expense_record(input_data: dict):
     id = generate_id()
 
     # generate Timestamp
-    dt = datetime.fromisoformat(datetime.datetime.now(datetime.timezone.utc))
+    dt = datetime.datetime.now(datetime.timezone.utc)
+    # dt = datetime.datetime.isoformat(datetime.datetime.now(datetime.timezone.utc))
     partition_key = dt.strftime("%Y-%m")
+    
 
     input_data['ExpenseId'] = id
-    input_data['PartiionKey'] = partition_key
+    input_data['PartitionKey'] = partition_key
     input_data['RowKey'] = id
     input_data['Status'] = 'Pending'
-    input_data['SubmittedAt'] = dt
+    input_data['SubmittedAt'] = dt.isoformat()
 
-    return table_client.create_entity(input_data)
+    table_client.create_entity(input_data)
+
+    return {
+        "ExpenseId": id,
+        "PartitionKey": partition_key,
+        "RowKey": id
+    }
 
 
 # Activity

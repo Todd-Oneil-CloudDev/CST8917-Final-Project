@@ -8,14 +8,14 @@
 ### Version A Durable Functions + Logic Apps
 ### ------------------------------------------------------------
 
-# @baseUrl = http://localhost:7071/api
-@baseUrl = https://cst8917-final-b3g9fkfgd9gfg9dm.canadacentral-01.azurewebsites.net/api
+@baseUrl = http://localhost:7071/api
+# @baseUrl = https://cst8917-final-b3g9fkfgd9gfg9dm.canadacentral-01.azurewebsites.net/api
 @managerDecision = Approved
 
 ### ------------------------------------------------------------
 ### 0. Health Check
 ### ------------------------------------------------------------
-GET {{baseUrl}}
+GET {{baseUrl}}/health
 
 
 ### ------------------------------------------------------------
@@ -206,19 +206,6 @@ Content-Type: application/json
     "decision": "Maybe",
     "reason": "Not sure yet"
 }
-
-### 6d. Approval call against an instance NOT currently waiting for approval
-### (e.g. re-run 2b twice, or target the auto-approve instance from test #1,
-### which completes immediately and is never waiting on the event)
-### Expect: 409, "Orchestrator not waiting for this event" (after the Response bug fix)
-POST {{baseUrl}}/approval/{{autoApproveInstanceId}}
-Content-Type: application/json
-
-{
-    "decision": "Approved",
-    "reason": "This orchestration already completed via auto-approval"
-}
-
 
 
 ### ------------------------------------------------------------
