@@ -11,6 +11,12 @@ from azure.data.tables import TableServiceClient, ResourceExistsError
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
+# table storage
+table_conn = os.getenv('TABLE_STORAGE_CONN')
+table_name = os.getenv('TABLE_NAME')
+service = TableServiceClient.from_connection_string(table_conn)
+table_client = service.get_table_client(table_name)
+
 # --- Helper Functions ---
 def UpdatePayload(payload: Dict[str, Any], status: str):
     payload['Status'] = status
@@ -19,6 +25,13 @@ def UpdatePayload(payload: Dict[str, Any], status: str):
 
 def generate_id(): 
     return uuid.uuid4()
+
+def update_audit_record(input: dict, status: str):
+    input['Status'] = status
+    input['ResolvedAt'] = datetime.fromisoformat(datetime.datetime.now(datetime.timezone.utc))
+
+    table_client.upsert_entity(input)
+
 
 
 # An HTTP-Triggered Function with a Durable Functions Client binding
@@ -126,6 +139,7 @@ def expense_orchestrator(context):
                 structure = UpdatePayload(
                     structure, 
                     'Approved')
+                update_audit_record(structure, structure['Status'])
                 skip_processing = True
                 logging.info(f"Approved...")
 
@@ -157,6 +171,7 @@ def expense_orchestrator(context):
             structure = UpdatePayload(
                 structure, 
                 'Escalated')
+            update_audit_record(structure, structure['Status'])
         else:
             logging.info(f"Manager Responded...")
             manager_decision = approval_task.result
@@ -166,6 +181,7 @@ def expense_orchestrator(context):
             structure = UpdatePayload(
                 structure, 
                 manager_decision['decision'])
+            update_audit_record(structure, structure['Status'])
                 
 
     logging.info(f"Notifying...")
@@ -236,11 +252,6 @@ async def validate_category(category: str):
 #  --- Audit Table Storage ---
 @app.activity_trigger(input_name="input_data")
 async def insert_expense_record(input_data: dict):
-    table_conn = os.getenv('TABLE_STORAGE_CONN')
-    table_name = os.getenv('TABLE_NAME')
-
-    service = TableServiceClient.from_connection_string(table_conn)
-    table_client = service.get_table_client(table_name)
 
     # generate ID
     id = generate_id()
