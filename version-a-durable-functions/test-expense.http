@@ -4,6 +4,10 @@
 ### Run `func start` locally before executing these
 ### ============================================================
 
+### ------------------------------------------------------------
+### Version A Durable Functions + Logic Apps
+### ------------------------------------------------------------
+
 # @baseUrl = http://localhost:7071/api
 @baseUrl = https://cst8917-final-b3g9fkfgd9gfg9dm.canadacentral-01.azurewebsites.net/api
 @managerDecision = Approved
@@ -31,15 +35,6 @@ Content-Type: application/json
     "managerEmail": "manager@example.com"
 }
 
-### Check status - paste statusQueryGetUri value manually, or use variable below
-### (REST Client can't easily parse the whole URL out of the body automatically,
-### so grab the "id" field and hit the status endpoint directly)
-@autoApproveInstanceId = {{startAutoApprove.response.body.id}}
-
-### 1b. Poll orchestration status (auto-approve)
-### Expect after a couple seconds: runtimeStatus "Completed", status "Approved", notification "email sent"
-GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{autoApproveInstanceId}}
-
 
 ### ------------------------------------------------------------
 ### 2. Manager Approval Required Path (amount >= 100)
@@ -60,12 +55,6 @@ Content-Type: application/json
 
 ###
 @managerApprovalInstanceId = {{startManagerApproval.response.body.id}}
-@managerApprovalStatusUri = {{startManagerApproval.response.body.statusQueryUri}}
-
-### 2a. Poll status BEFORE approving - runtimeStatus should be "Running",
-### customStatus should show {"waiting_for": "manager_approval"}
-# GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{managerApprovalInstanceId}}
-GET {{managerApprovalStatusUri}}
 
 ### 2b. Manager approves the expense
 ### Expect: 200 OK, "Sent decision ... to instance ..."
@@ -76,11 +65,6 @@ Content-Type: application/json
     "decision": "Approved",
     "reason": "Looks good, approved for client travel."
 }
-
-### 2c. Poll status AFTER approving
-### Expect: runtimeStatus "Completed", status "Approved", notification "email sent"
-GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{managerApprovalInstanceId}}
-
 
 ### ------------------------------------------------------------
 ### 3. Manager Rejection Path
@@ -109,10 +93,6 @@ Content-Type: application/json
     "reason": "Not an approved equipment category for remote workers."
 }
 
-### 3b. Poll status - expect status "Rejected"
-GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{rejectionInstanceId}}
-
-
 ### ------------------------------------------------------------
 ### 4. Escalation Path (manager doesn't respond within timeout window)
 ### Start this, then simply DO NOT call the approval endpoint.
@@ -134,9 +114,7 @@ Content-Type: application/json
 ###
 @escalationInstanceId = {{startEscalation.response.body.id}}
 
-### 4a. Wait 60+ seconds, then poll - expect status "Escalated"
-GET {{baseUrl}}/orchestrators/expense_orchestrator/instances/{{escalationInstanceId}}
-
+### wait 60+ seconds for timeout, escalation email should follow shorly after
 
 ### ------------------------------------------------------------
 ### 5. Validation Failures - Starter Function
@@ -241,6 +219,91 @@ Content-Type: application/json
     "reason": "This orchestration already completed via auto-approval"
 }
 
+
+
+### ------------------------------------------------------------
+### Version B Logic APP + Service Bus
+### ------------------------------------------------------------
+
+@baseUrlLA = https://prod-17.northcentralus.logic.azure.com:443/workflows/3aeb3055d2594ce685c73de3e1cf92f3/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=Qp-E2II4cFL_EaGNNZ0xQF9zwWEQAAc769I6Els75-Q
+
+### ------------------------------------------------------------
+### 1. Auto-Approve Path (amount < 100)
+### ------------------------------------------------------------
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 42.50,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "onei0240@algonquinlive.com"
+}
+
+### ------------------------------------------------------------
+### 2. Manager Required Path (amount > 100)
+### Approval Email will be sent to managerEmail with Approved or Rejected options
+### You can use this same test for either workflow
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 101,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "onei0240@algonquinlive.com"
+}
+
+
+### ------------------------------------------------------------
+### 3. Invalid JSON
+### Expected 400 Invalid JSON Structure
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{ not valid json }
+
+
+### ------------------------------------------------------------
+### 4. Missing Required Fields
+### Expected 400 Invalid JSON Structure
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "amount": 101,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "onei0240@algonquinlive.com"
+}
+
+### ------------------------------------------------------------
+### 5. Invalid Category
+### Expected return 400 Invalid Category Type
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "toddoneil42@gmail.com",
+    "amount": 101,
+    "category": "some stuff",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "onei0240@algonquinlive.com"
+}
 
 ### ------------------------------------------------------------
 ### Notes

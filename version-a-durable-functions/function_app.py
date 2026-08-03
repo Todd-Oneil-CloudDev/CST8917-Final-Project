@@ -1,22 +1,24 @@
 import json
 import os
 import aiohttp
+import uuid
 import azure.functions as func
 import logging
 from typing import Dict, Any
 import datetime
 from azure.durable_functions import OrchestrationRuntimeStatus
+from azure.data.tables import TableServiceClient, ResourceExistsError
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-
-
 # --- Helper Functions ---
-def UpdatePayload(payload: Dict[str, Any], status: str, reason: str):
-    payload['response']['status'] = status
-    payload['response']['reason'] = reason
+def UpdatePayload(payload: Dict[str, Any], status: str):
+    payload['Status'] = status
 
     return payload
+
+def generate_id(): 
+    return uuid.uuid4()
 
 
 # An HTTP-Triggered Function with a Durable Functions Client binding
@@ -69,20 +71,23 @@ async def expense_orchestration_starter(req: func.HttpRequest, client):
 def expense_orchestrator(context):
 
     skip_processing = False
+    insert_error = False
 
     data = context.get_input()
 
-    final_response = {
-        'name': data['employeeName'],
-        'email': data['employeeEmail'],
-        'amount': data['amount'],
-        'category': data['category'],
-        'description': data['description'],
-        'manager_email': data['managerEmail'],
-        'response': {
-            'status': '',
-            'reason': ''
-        }
+    structure = {
+        'PartitionKey': '',
+        'RowKey': '',
+        'ExpenseId': '',
+        'EmployeeName': data['employeeName'],
+        'EmployeeEmail': data['employeeEmail'],
+        'Amount': data['amount'],
+        'Category': data['category'],
+        'Description': data['description'],
+        'ManagerEmail': data['managerEmail'],
+        'Status': '',
+        'SubmittedAt': '',
+        'ResolvedAt': ''
     }
 
     logging.info(f"Validating Category...")
@@ -94,28 +99,41 @@ def expense_orchestrator(context):
 
     if not validation_result['is_valid']:
         logging.info(f"Category: {data['category']} Not Valid...")
-        final_response = UpdatePayload(
-            final_response, 
-            'Rejected', 
-            validation_result['reason'])
+        structure = UpdatePayload(
+            structure, 
+            'Rejected')
         skip_processing = True
     else:
         logging.info(f"Category Validated...")
         logging.info(f"Processing...")
-        # --- Step 2: Check Auto Approval ---
-        if data['amount'] < 100:
-            final_response = UpdatePayload(
-                final_response, 
-                'Approved', 
-                'Expense amount under $100 - auto approved')
+
+        # --- Step 2: Insert Audit Record ---
+        try:
+            rec = yield context.call_activity(
+                "insert_expense_record",
+                structure
+            )
+        except Exception as e:
+            insert_error = True
             skip_processing = True
-            logging.info(f"Approved...")
+            structure = UpdatePayload(
+                structure, 
+                'Failed To Insert')
+            
+        if structure['Status'] != 'Failed To Insert':
+            # --- Step 3: Check Auto Approval ---
+            if data['amount'] < 100:
+                structure = UpdatePayload(
+                    structure, 
+                    'Approved')
+                skip_processing = True
+                logging.info(f"Approved...")
 
     
     logging.info(f"Processing...")
     if not skip_processing:    
 
-        # --- Step 3: Request Manager Approval ---
+        # --- Step 4: Request Manager Approval ---
         approval_event = "manager_approval"
         timeout = context.current_utc_datetime + datetime.timedelta(seconds=60)
 
@@ -136,27 +154,36 @@ def expense_orchestrator(context):
 
         if winner == timeout_task:
             logging.info(f"Manager Unavailable For Approval...")
-            final_response = UpdatePayload(
-                final_response, 
-                'Escalated', 
-                'Manager unavailable for approval.')
+            structure = UpdatePayload(
+                structure, 
+                'Escalated')
         else:
             logging.info(f"Manager Responded...")
             manager_decision = approval_task.result
             if isinstance(manager_decision, str):
                 manager_decision = json.loads(manager_decision)
 
-            final_response = UpdatePayload(
-                final_response, 
-                manager_decision['decision'], 
-                manager_decision['reason'])
+            structure = UpdatePayload(
+                structure, 
+                manager_decision['decision'])
                 
 
     logging.info(f"Notifying...")
-    # --- Step 4: Notify User ---
+    # --- Step 5: Notify User ---
     notification_result = yield context.call_activity(
         "send_notification",
-        final_response
+        {
+            'ExpenseId': structure['ExpenseId'],
+            'EmployeeName': structure['EmployeeName'],
+            'EmployeeEmail': structure['EmployeeEmail'],
+            'Amount': structure['Amount'],
+            'Category': structure['Category'],
+            'Description': structure['Description'],
+            'ManagerEmail': structure['ManagerEmail'],
+            'Status': structure['Status'],
+            'SubmittedAt': structure['SubmittedAt'],
+            'ResolvedAt': structure['ResolvedAt']
+        }
     )
 
     sent = ''
@@ -166,7 +193,7 @@ def expense_orchestrator(context):
         sent = 'email failed'
 
     return {
-        "status": final_response['response']['status'],
+        "status": structure['Status'],
         "notification": sent 
     }
 
@@ -204,6 +231,33 @@ async def validate_category(category: str):
         'reason': '' if valid else f"{category} is not a valid category"
     }
 
+
+# Activity
+#  --- Audit Table Storage ---
+@app.activity_trigger(input_name="input_data")
+async def insert_expense_record(input_data: dict):
+    table_conn = os.getenv('TABLE_STORAGE_CONN')
+    table_name = os.getenv('TABLE_NAME')
+
+    service = TableServiceClient.from_connection_string(table_conn)
+    table_client = service.get_table_client(table_name)
+
+    # generate ID
+    id = generate_id()
+
+    # generate Timestamp
+    dt = datetime.fromisoformat(datetime.datetime.now(datetime.timezone.utc))
+    partition_key = dt.strftime("%Y-%m")
+
+    input_data['ExpenseId'] = id
+    input_data['PartiionKey'] = partition_key
+    input_data['RowKey'] = id
+    input_data['Status'] = 'Pending'
+    input_data['SubmittedAt'] = dt
+
+    return table_client.create_entity(input_data)
+
+
 # Activity
 # --- Manager Approval Endpoint ---
 @app.route(route="approval/{instance_id}")
@@ -215,7 +269,6 @@ async def manager_approval(req: func.HttpRequest, client):
       POST /approval/abc123
       body:{
         'decision': 'Approved',
-        'reason': 'some reason given'
       }
     """
     # Get orchestrator instance
