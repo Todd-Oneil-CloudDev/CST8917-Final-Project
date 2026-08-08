@@ -59,14 +59,14 @@ Similar to Version A, a user submits an expense via HTTP request. That is sent t
 The processing Logic app reads the message from Service Bus and gets the record from table storage.  Based on the type it will either send an auto-approved email to the user or will send a verification request email to the manager.  If the manager email timesout an escalated email is sent to the user, otherwise an approved/rejected email is sent to the user.
 
 **Approach chosen for manager approval:**  
-Since Logic Apps doesn't inherantly have a "human interation" pattern like Durable Functions I decided to use the Office365 Approval Email connection.  This allows for an easy implmentation of this pattern. It automatically send an email with buttons for the choices you are looking for, such as "approved" / "rejected" and waits for a response. I than had parallel branches, one for when a response was given and another for when the email response timed out.  Both branches execute the same logic just with different values -> update the record in table storage and send a notification email.
+Since Logic Apps doesn't inherantly have a "human interaction" pattern like Durable Functions I decided to use the Office365 Approval Email connection.  This allows for an easy implementation of this pattern. It automatically send an email with buttons for the choices you are looking for, such as "approved" / "rejected" and waits for a response. I than had parallel branches, one for when a response was given and another for when the email response timed out.  Both branches execute the same logic just with different values -> update the record in table storage and send a notification email.
 
 **Design Decisions:**
-- I split this applcation into two different logic apps to make the development easier. Each application is responsible for one half of the logic, seperating concerns. This also makes editing/changing each part of the application simpler as each one is isolated.
+- I split this application into two different logic apps to make the development easier. Each application is responsible for one half of the logic, seperating concerns. This also makes editing/changing each part of the application simpler as each one is isolated.
 - Service Bus Queues were used instead of topics.  Topic would have been the better choice if multiple services needed to process the message information. Since this scenario was limited in scope a messaging queue with a peek-lock for individual processing made the most sense.
 
 **Challenges:**
-- Implmenting the close message functionality when the processing logic app was finished and emails were sent was problematic. If messages are not cleaning closed after processing the application continously processes the same message over again forever.  Adding the Close message action resolves this issue.
+- Implementing the close message functionality when the processing logic app was finished and emails were sent was problematic. If messages are not cleaning closed after processing the application continously processes the same message over again forever.  Adding the Close message action resolves this issue.
 - The Office365 Approval-Email action was causing an issue with my initial configuration of the message queue. The message locks were only set for 1 minute, so with the timeout of the approval email also being a minute, once the emailed timed out and executed the parallel branch to process the 'Escalated' workflow the message lock had expired and woudl throw a 400 error.  Increasing the lock timer on the messaging queue resolved this issue.
 
 **Test Results / Screenshots:**  
@@ -90,9 +90,6 @@ Version B Processing
 ---
 
 ## Comparison Analysis
-
-*(800–1200 words total, covering all six dimensions below with specific, experience-based observations — not generic statements)*
-
 ### Development Experience
 
 My experience developing both applications was good overall. Durable Functions I found to be far easier to implement the business logic and "heavy lifting" of the workflow.  With local development and the ability to use breakpoints for debugging I was more confident I had the logic correct using code than in something like Logic Apps.
@@ -115,7 +112,7 @@ Logic Apps hand errors differently, the developer is stil responsible for runtim
 
 One drawback to error handling in Logic Apps is the execute on run status dropdown menu only allows to check actions on the same level of the selected action. So if you have an action you'd like to run outside of a condition, and you want to check the run status of an action inside that condition you won't be able to unless you utilize code. If the developer isn't familiar with the programming syntax required they won't be able to access the action they'd like to track.
 
-One error I ran into was a 400 BadRequest error when the timout workflow exectued in Version B. This was due to the message lock not being long enough (it defaults to 1 minute). So when the message was read the timer started and the human interation also had a timeout of 1 minute so when it expired and triggered the timeout branch, by the time it reached the close message action the lock had expired.
+One error I ran into was a 400 BadRequest error when the timout workflow exectued in Version B. This was due to the message lock not being long enough (it defaults to 1 minute). So when the message was read the timer started and the human interaction also had a timeout of 1 minute so when it expired and triggered the timeout branch, by the time it reached the close message action the lock had expired.
 
 ### Human Interaction Pattern
 
@@ -139,10 +136,6 @@ Logic Apps have run history.  Each time the app is trigger it's current running 
 ---
 
 ## Recommendation
-
-*(200–300 words)*
-
-[If a team asked you to build this for production, which approach would you choose and why? When would you choose the other instead? Be direct and specific — back it with what you actually experienced, not generic pros/cons.]
 
 My recommendation if this application were to be built in production would be to use both Durable Functions and Logic Apps, playing to each one's strengths rather than picking a single tool.
 
