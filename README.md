@@ -27,12 +27,14 @@ Version A was implemented with an HTTP triggered Durable Function that uses the 
 
 The client function validates the JSON body i nthe request before starting the orchestrator function saving resources.  The orchestrator using activity chaining to process the expense in a linear fashion validating the category -> storing expense -> amount business logic -> determining human interation -> handing off to logic app for notifications.
 
-**Design Decisions:**
+**Design Decisions:**  
+
 - Validating JSON in the client function saves time rather than validations happening in the orchestrator allowing for early returns.
 - I decided to use function chaining rather than fan-out fan-in due to the linear nature of validations. Running the amount business logic doesn't make sense if the caegory isn't valid.
 - I chose Logic Apps for the notification for its ease of use in simple workflows. It is only used to send an email to the used based on the status sent in the payload.
 
-**Challenges:**
+**Challenges:**  
+
 - Configuring the human interaction pattern was a challenge, as I have never done that before.  Using Microsoft's exmaple [here](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-human-interaction?tabs=python&pivots=durable-functions) I was able to adapt that to my use case.
 - Inserting and updating records with the table storage API proved a little annoying. Date value types aren't allowed as they expected to be strings. Easy enough fix with str(), ToString(), etc. But when you're getting errors without great context is makes things difficult.
 
@@ -53,12 +55,14 @@ The client function validates the JSON body i nthe request before starting the o
 
 Version B implementation uses 2 different Logic Apps with Azure Service Bus between them.  This allows for decoupling and making the overall workflow easier to implement.
 
-**Architecture:**  
+**Architecture:** 
+
 Similar to Version A, a user submits an expense via HTTP request. That is sent to the Injection Logic app which handles JSON validation, category validation, record storage, and expense amount business logic.  It then sends a message to Service Bus with the storage record metadata for the processing Logic App.
 
 The processing Logic app reads the message from Service Bus and gets the record from table storage.  Based on the type it will either send an auto-approved email to the user or will send a verification request email to the manager.  If the manager email timesout an escalated email is sent to the user, otherwise an approved/rejected email is sent to the user.
 
 **Approach chosen for manager approval:**  
+
 Since Logic Apps doesn't inherantly have a "human interaction" pattern like Durable Functions I decided to use the Office365 Approval Email connection.  This allows for an easy implementation of this pattern. It automatically send an email with buttons for the choices you are looking for, such as "approved" / "rejected" and waits for a response. I than had parallel branches, one for when a response was given and another for when the email response timed out.  Both branches execute the same logic just with different values -> update the record in table storage and send a notification email.
 
 **Design Decisions:**
@@ -97,7 +101,7 @@ My experience developing both applications was good overall. Durable Functions I
 Logic Apps had it's advantages as well though. Having a visual designer plus pre-built templates for common use-cases makes for an easy and enjoyable experience. If a workflow fits within any of the available templates Logic Apps could be a clear winner and obvious choice.  Having a wide selection on enterprise connectors really simplfies integration, so I cetainly give the edge to Logic Apps in that regard. being able to seeemlessly and simply integrate connections to different resources, be it Azure or thrid party, really made the notification development a breeze.
 
 ### Testability
-[Which was easier to test locally? Could you write automated tests for either? What did that actually look like?]
+
 Testing both applications was fairly easy.  Logic Apps has the abolity to run the application with or without a payload.  The drawback was I didn't find any way to pre-define certain situations, like creating pre-built payloads for different tests.  However it made up for that in the visual display while the app was running.
 
 Durable Functions required a bit more setup for testing, but once that initial configuration was set it made subsequent tests much faster and easier. Using a .http file with pre-detrmined scenarios and payloads made ensuring wider testing coverage could be achieved.
