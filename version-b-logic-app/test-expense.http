@@ -1,0 +1,101 @@
+### ------------------------------------------------------------
+### Version B Logic APP + Service Bus
+### Replace demo email addresses with your own
+### ------------------------------------------------------------
+
+@baseUrlLA = <YOUR URL STRING>
+### ------------------------------------------------------------
+### 1. Auto-Approve Path (amount < 100)
+### ------------------------------------------------------------
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "test@example.com",
+    "amount": 42.50,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "test@example.com"
+}
+
+### ------------------------------------------------------------
+### 2. Manager Required Path (amount > 100)
+### Approval Email will be sent to managerEmail with Approved or Rejected options
+### You can use this same test for either workflow
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "test@example.com",
+    "amount": 101,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "test@example.com"
+}
+
+
+### ------------------------------------------------------------
+### 3. Invalid JSON
+### Expected 400 Invalid JSON Structure
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{ not valid json }
+
+
+### ------------------------------------------------------------
+### 4. Missing Required Fields
+### Expected 400 Invalid JSON Structure
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "amount": 101,
+    "category": "supplies",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "test@example.com"
+}
+
+### ------------------------------------------------------------
+### 5. Invalid Category
+### Expected return 400 Invalid Category Type
+### ------------------------------------------------------------
+
+POST {{baseUrlLA}}
+Content-Type: application/json
+
+{
+    "employeeName": "Jane Doe",
+    "employeeEmail": "test@example.com",
+    "amount": 101,
+    "category": "some stuff",
+    "description": "Office supplies - notebooks and pens",
+    "managerEmail": "test@example.com"
+}
+
+### ------------------------------------------------------------
+### Notes
+### ------------------------------------------------------------
+# - Run requests top to bottom within each numbered section; later requests in
+#   a section depend on the @name'd response above it via REST Client variables.
+# - REST Client variable capture (e.g. {{startAutoApprove.response.body.id}}) only
+#   works after you've manually sent that specific request at least once in this
+#   VS Code session - the variable won't resolve until its source request has run.
+# - Durable Functions' default HTTP management API exposes GET on
+#   /runtime/webhooks/durabletask/instances/{instanceId} normally, but since your
+#   HttpStart binding gives you a friendlier "statusQueryGetUri" in the 202 body,
+#   /orchestrators/expense_orchestrator/instances/{id} above assumes you have (or add)
+#   a thin status-check route. If you don't have one, just copy the full
+#   "statusQueryGetUri" value from the 202 response body and GET that URL directly
+#   instead - it will include the required system key as a query param.
+# - Adjust the port (7071) if your local.settings.json or launch config uses a
+#   different one.
