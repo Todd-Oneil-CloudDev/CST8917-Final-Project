@@ -3,7 +3,7 @@
 ### Replace demo email addresses with your own
 ### ------------------------------------------------------------
 
-@baseUrlLA = <YOUR URL STRING>
+@baseUrlLA = <PLACEHOLDER URL>
 ### ------------------------------------------------------------
 ### 1. Auto-Approve Path (amount < 100)
 ### ------------------------------------------------------------
@@ -16,7 +16,7 @@ Content-Type: application/json
     "amount": 42.50,
     "category": "supplies",
     "description": "Office supplies - notebooks and pens",
-    "managerEmail": "test@example.com"
+    "managerEmail": "manager@example.com"
 }
 
 ### ------------------------------------------------------------

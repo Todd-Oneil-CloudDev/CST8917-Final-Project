@@ -50,7 +50,7 @@ Content-Type: application/json
     "amount": 450.00,
     "category": "travel",
     "description": "Flight to client site",
-    "managerEmail": "test@example.com"
+    "managerEmail": "manager@example.com"
 }
 
 ###

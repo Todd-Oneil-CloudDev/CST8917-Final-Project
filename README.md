@@ -10,14 +10,17 @@
 
 ## Table of Contents
 
-1. [Version A Summary — Durable Functions](#version-a-summary--durable-functions)
-2. [Version B Summary — Logic Apps + Service Bus](#version-b-summary--logic-apps--service-bus)
-3. [Comparison Analysis](#comparison-analysis)
-4. [Recommendation](#recommendation)
-5. [References](#references)
-6. [AI Disclosure](#ai-disclosure)
+1. [Demo Link](#demo-link)
+2. [Version A Summary — Durable Functions](#version-a-summary--durable-functions)
+3. [Version B Summary — Logic Apps + Service Bus](#version-b-summary--logic-apps--service-bus)
+4. [Comparison Analysis](#comparison-analysis)
+5. [Recommendation](#recommendation)
+6. [References](#references)
+7. [AI Disclosure](#ai-disclosure)
 
 ---
+
+## [Demo Link](https://www.youtube.com/watch?v=goBTUqiQ1PM)
 
 ## Version A Summary — Durable Functions
 
